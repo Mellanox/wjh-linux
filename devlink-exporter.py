@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+from prometheus_client.core import CounterMetricFamily
+
 class DevlinkCollector(object):
     """Collect devlink metrics and publish them via http or save them to a file."""
 
@@ -96,7 +98,7 @@ class DevlinkCollector(object):
         Collect the metrics and yield them. Prometheus client library
         uses this method to respond to http queries or save them to disk.
         """
-        counter = prometheus_client.core.CounterMetricFamily(
+        counter = CounterMetricFamily(
             'node_net_devlink', 'Devlink data', labels=['device', 'trap', 'group', 'type'])
         self.update_devlink_stats(counter)
         yield counter
