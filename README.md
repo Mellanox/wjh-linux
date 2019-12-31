@@ -7,3 +7,4 @@ hardware packet drops and exceptions over Linux native interfaces.
 Please refer to each tool's page for instructions.
 
 * [Devlink exporter](devlink-exporter)
+* [Aggregated statistics using eBPF](trapagg)
