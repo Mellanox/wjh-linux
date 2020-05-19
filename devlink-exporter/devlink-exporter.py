@@ -70,7 +70,7 @@ class DevlinkCollector(object):
             arguments.interval = 5
         self.args = vars(arguments)
 
-    def update_devlink_stats(self, counter):
+    def update_devlink_trap_stats(self, counter):
         """Update counter with statistics from devlink trap."""
         command = ['devlink', '-s', 'trap', '-jp']
         try:
@@ -104,10 +104,11 @@ class DevlinkCollector(object):
         Collect the metrics and yield them. Prometheus client library
         uses this method to respond to http queries or save them to disk.
         """
-        counter = CounterMetricFamily('node_net_devlink', 'Devlink data',
+        counter = CounterMetricFamily('node_net_devlink_trap',
+                                      'Devlink trap data',
                                       labels=['device', 'trap', 'group',
                                               'trap_type', 'action', 'type'])
-        self.update_devlink_stats(counter)
+        self.update_devlink_trap_stats(counter)
         yield counter
 
 
