@@ -12,8 +12,10 @@ import time
 
 from prometheus_client.core import CounterMetricFamily
 
+
 class DevlinkCollector(object):
-    """Collect devlink metrics and publish them via http or save them to a file."""
+    """Collect devlink metrics and publish them via http or save them to a
+       file."""
 
     def __init__(self, args=None):
         """Construct the object and parse the arguments."""
@@ -77,19 +79,22 @@ class DevlinkCollector(object):
             logging.critical('devlink not found. Giving up')
             sys.exit(1)
         except PermissionError as e:
-            logging.critical('Permission error trying to run devlink: {}'.format(e))
+            err_str = 'Permission error trying to run devlink: {}'
+            logging.critical(err_str.format(e))
             sys.exit(1)
         data = proc.communicate()[0]
         if proc.returncode != 0:
             logging.critical('devlink returned non-zero return code')
             return
-        jsonout = json.loads(data);
+        jsonout = json.loads(data)
 
         for devhandle in jsonout["trap"]:
             for trap in jsonout["trap"][devhandle]:
                 labels = [devhandle, trap["name"], trap["group"]]
-                counter.add_metric(labels + ["rx_bytes"], trap["stats"]["rx"]["bytes"])
-                counter.add_metric(labels + ["rx_packets"], trap["stats"]["rx"]["packets"])
+                counter.add_metric(labels + ["rx_bytes"],
+                                   trap["stats"]["rx"]["bytes"])
+                counter.add_metric(labels + ["rx_packets"],
+                                   trap["stats"]["rx"]["packets"])
 
     def collect(self):
         """
@@ -98,8 +103,9 @@ class DevlinkCollector(object):
         Collect the metrics and yield them. Prometheus client library
         uses this method to respond to http queries or save them to disk.
         """
-        counter = CounterMetricFamily(
-            'node_net_devlink', 'Devlink data', labels=['device', 'trap', 'group', 'type'])
+        counter = CounterMetricFamily('node_net_devlink', 'Devlink data',
+                                      labels=['device', 'trap', 'group',
+                                              'type'])
         self.update_devlink_stats(counter)
         yield counter
 
