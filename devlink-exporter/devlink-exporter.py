@@ -90,7 +90,7 @@ class DevlinkCollector(object):
 
         for devhandle in jsonout["trap"]:
             for trap in jsonout["trap"][devhandle]:
-                labels = [devhandle, trap["name"], trap["group"]]
+                labels = [devhandle, trap["name"], trap["group"], trap["type"]]
                 counter.add_metric(labels + ["rx_bytes"],
                                    trap["stats"]["rx"]["bytes"])
                 counter.add_metric(labels + ["rx_packets"],
@@ -105,7 +105,7 @@ class DevlinkCollector(object):
         """
         counter = CounterMetricFamily('node_net_devlink', 'Devlink data',
                                       labels=['device', 'trap', 'group',
-                                              'type'])
+                                              'trap_type', 'type'])
         self.update_devlink_stats(counter)
         yield counter
 
