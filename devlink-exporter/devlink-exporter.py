@@ -97,6 +97,36 @@ class DevlinkCollector(object):
                 counter.add_metric(labels + ["rx_packets"],
                                    trap["stats"]["rx"]["packets"])
 
+    def update_devlink_trap_group_stats(self, counter):
+        """Update counter with statistics from devlink trap group."""
+        command = ['devlink', '-s', 'trap', 'group', '-jp']
+        try:
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE)
+        except FileNotFoundError:
+            logging.critical('devlink not found. Giving up')
+            sys.exit(1)
+        except PermissionError as e:
+            err_str = 'Permission error trying to run devlink: {}'
+            logging.critical(err_str.format(e))
+            sys.exit(1)
+        data = proc.communicate()[0]
+        if proc.returncode != 0:
+            logging.critical('devlink returned non-zero return code')
+            return
+        jsonout = json.loads(data)
+
+        for devhandle in jsonout["trap_group"]:
+            for trap_group in jsonout["trap_group"][devhandle]:
+                try:
+                    trap_policer = trap_group["policer"]
+                except KeyError:
+                    trap_policer = 0
+                labels = [devhandle, trap_group["name"], str(trap_policer)]
+                counter.add_metric(labels + ["rx_bytes"],
+                                   trap_group["stats"]["rx"]["bytes"])
+                counter.add_metric(labels + ["rx_packets"],
+                                   trap_group["stats"]["rx"]["packets"])
+
     def collect(self):
         """
         Collect the metrics.
@@ -111,6 +141,12 @@ class DevlinkCollector(object):
         self.update_devlink_trap_stats(counter)
         yield counter
 
+        counter = CounterMetricFamily('node_net_devlink_trap_group',
+                                      'Devlink trap group data',
+                                      labels=['device', 'group', 'policer',
+                                              'type'])
+        self.update_devlink_trap_group_stats(counter)
+        yield counter
 
 if __name__ == '__main__':
     collector = DevlinkCollector()
