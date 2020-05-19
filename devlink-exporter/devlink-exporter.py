@@ -127,6 +127,32 @@ class DevlinkCollector(object):
                 counter.add_metric(labels + ["rx_packets"],
                                    trap_group["stats"]["rx"]["packets"])
 
+    def update_devlink_trap_policer_stats(self, counter):
+        """Update counter with statistics from devlink trap policer."""
+        command = ['devlink', '-s', 'trap', 'policer', '-jp']
+        try:
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE)
+        except FileNotFoundError:
+            logging.critical('devlink not found. Giving up')
+            sys.exit(1)
+        except PermissionError as e:
+            err_str = 'Permission error trying to run devlink: {}'
+            logging.critical(err_str.format(e))
+            sys.exit(1)
+        data = proc.communicate()[0]
+        if proc.returncode != 0:
+            logging.critical('devlink returned non-zero return code')
+            return
+        jsonout = json.loads(data)
+
+        for devhandle in jsonout["trap_policer"]:
+            for trap_policer in jsonout["trap_policer"][devhandle]:
+                labels = [devhandle, str(trap_policer["policer"]),
+                          str(trap_policer["rate"]),
+                          str(trap_policer["burst"])]
+                counter.add_metric(labels,
+                                   trap_policer["stats"]["rx"]["dropped"])
+
     def collect(self):
         """
         Collect the metrics.
@@ -146,6 +172,13 @@ class DevlinkCollector(object):
                                       labels=['device', 'group', 'policer',
                                               'type'])
         self.update_devlink_trap_group_stats(counter)
+        yield counter
+
+        counter = CounterMetricFamily('node_net_devlink_trap_policer',
+                                      'Devlink trap policer data',
+                                      labels=['device', 'policer', 'rate',
+                                              'burst', 'dropped'])
+        self.update_devlink_trap_policer_stats(counter)
         yield counter
 
 if __name__ == '__main__':
