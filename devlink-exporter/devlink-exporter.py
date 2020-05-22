@@ -70,9 +70,8 @@ class DevlinkCollector(object):
             arguments.interval = 5
         self.args = vars(arguments)
 
-    def update_devlink_trap_stats(self, counter):
-        """Update counter with statistics from devlink trap."""
-        command = ['devlink', '-s', 'trap', '-jp']
+    def devlink_jsonout_get(self, command):
+        """Execute command and return JSON output."""
         try:
             proc = subprocess.Popen(command, stdout=subprocess.PIPE)
         except FileNotFoundError:
@@ -85,8 +84,13 @@ class DevlinkCollector(object):
         data = proc.communicate()[0]
         if proc.returncode != 0:
             logging.critical('devlink returned non-zero return code')
-            return
-        jsonout = json.loads(data)
+            sys.exit(1)
+        return json.loads(data)
+
+    def update_devlink_trap_stats(self, counter):
+        """Update counter with statistics from devlink trap."""
+        command = ['devlink', '-s', 'trap', '-jp']
+        jsonout = self.devlink_jsonout_get(command)
 
         for devhandle in jsonout["trap"]:
             for trap in jsonout["trap"][devhandle]:
@@ -100,20 +104,7 @@ class DevlinkCollector(object):
     def update_devlink_trap_group_stats(self, counter):
         """Update counter with statistics from devlink trap group."""
         command = ['devlink', '-s', 'trap', 'group', '-jp']
-        try:
-            proc = subprocess.Popen(command, stdout=subprocess.PIPE)
-        except FileNotFoundError:
-            logging.critical('devlink not found. Giving up')
-            sys.exit(1)
-        except PermissionError as e:
-            err_str = 'Permission error trying to run devlink: {}'
-            logging.critical(err_str.format(e))
-            sys.exit(1)
-        data = proc.communicate()[0]
-        if proc.returncode != 0:
-            logging.critical('devlink returned non-zero return code')
-            return
-        jsonout = json.loads(data)
+        jsonout = self.devlink_jsonout_get(command)
 
         for devhandle in jsonout["trap_group"]:
             for trap_group in jsonout["trap_group"][devhandle]:
@@ -130,20 +121,7 @@ class DevlinkCollector(object):
     def update_devlink_trap_policer_stats(self, counter):
         """Update counter with statistics from devlink trap policer."""
         command = ['devlink', '-s', 'trap', 'policer', '-jp']
-        try:
-            proc = subprocess.Popen(command, stdout=subprocess.PIPE)
-        except FileNotFoundError:
-            logging.critical('devlink not found. Giving up')
-            sys.exit(1)
-        except PermissionError as e:
-            err_str = 'Permission error trying to run devlink: {}'
-            logging.critical(err_str.format(e))
-            sys.exit(1)
-        data = proc.communicate()[0]
-        if proc.returncode != 0:
-            logging.critical('devlink returned non-zero return code')
-            return
-        jsonout = json.loads(data)
+        jsonout = self.devlink_jsonout_get(command)
 
         for devhandle in jsonout["trap_policer"]:
             for trap_policer in jsonout["trap_policer"][devhandle]:
