@@ -74,12 +74,8 @@ class DevlinkCollector(object):
         """Execute command and return JSON output."""
         try:
             proc = subprocess.Popen(command, stdout=subprocess.PIPE)
-        except FileNotFoundError:
-            logging.critical('devlink not found. Giving up')
-            sys.exit(1)
-        except PermissionError as e:
-            err_str = 'Permission error trying to run devlink: {}'
-            logging.critical(err_str.format(e))
+        except OSError as e:
+            logging.critical(e.strerror)
             sys.exit(1)
         data = proc.communicate()[0]
         if proc.returncode != 0:
