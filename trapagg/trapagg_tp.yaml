@@ -1,0 +1,338 @@
+programs:
+  - name: trapagg
+    metrics:
+      counters:
+        - name: flow_trap_packets
+          help: Per-{flow, trap} statistics
+          table: flows
+          labels:
+            - name: saddrv4
+              size: 4
+              decoders:
+                - name: inet_ip
+            - name: daddrv4
+              size: 4
+              decoders:
+                - name: inet_ip
+            - name: saddrv6
+              size: 16
+              decoders:
+                - name: inet_ip
+            - name: daddrv6
+              size: 16
+              decoders:
+                - name: inet_ip
+            - name: addr_proto
+              size: 2
+              decoders:
+                - name: uint
+                - name: static_map
+                  static_map:
+                    2048: ipv4
+                    34525: ipv6
+            - name: sport
+              size: 2
+              decoders:
+                 - name: uint
+            - name: dport
+              size: 2
+              decoders:
+                 - name: uint
+            - name: ip_proto
+              size: 1
+              decoders:
+                - name: uint
+            - name: is_encap
+              size: 1
+              decoders:
+                - name: uint
+            - name: trap
+              size: 40
+              decoders:
+                - name: string
+    raw_tracepoints:
+      devlink_trap_report: raw_tracepoint__devlink_trap_report
+    code: |
+        #include <linux/skbuff.h>
+        #include <net/devlink.h>
+        #include <uapi/linux/if_ether.h>
+        #include <uapi/linux/if_tunnel.h>
+        #include <uapi/linux/in.h>
+        #include <uapi/linux/ip.h>
+        #include <uapi/linux/ipv6.h>
+        #include <uapi/linux/tcp.h>
+        #include <uapi/linux/udp.h>
+
+        #define IP_OFFSET	0x1FFF
+
+        struct vlan_hdr {
+                __be16 h_vlan_TCI;
+                __be16 h_vlan_encapsulated_proto;
+        };
+
+        struct gre_hdr {
+                __be16 flags;
+                __be16 proto;
+        };
+
+        #define TRAP_NAME_LEN 40
+
+        struct flow_key_record {
+                __be32 saddrv4;
+                __be32 daddrv4;
+                __u32 saddrv6[4];
+                __u32 daddrv6[4];
+                __u16 addr_proto;	/* ETH_P_IP or ETH_P_IPV6 */
+                __u16 sport;
+                __u16 dport;
+                __u8 ip_proto;
+                __u8 is_encap;
+                char trap_name[TRAP_NAME_LEN];
+        };
+
+        BPF_TABLE("lru_hash", struct flow_key_record, u64, flows, 1024);
+
+        static __always_inline bool flow_dissector_valid_access(struct sk_buff *skb,
+                                                                __u16 offset,
+                                                                __u16 hdr_size)
+        {
+                unsigned int len, data_len;
+
+                bpf_probe_read(&len, sizeof(len), &skb->len);
+                bpf_probe_read(&data_len, sizeof(data_len), &skb->data_len);
+
+                /* Verify this variable offset does not overflow. */
+                if (offset > (USHRT_MAX - hdr_size))
+                        return false;
+
+                /* Make sure we only access data in linear area. */
+                return offset + hdr_size < len - data_len;
+        }
+
+        static __always_inline bool
+        flow_dissector_ipv4_dissect(struct sk_buff *skb, struct flow_key_record *flow,
+                                    __u16 *p_offset)
+        {
+                void *skb_data = (void *)(long) skb->data;
+                struct iphdr iph;
+
+                if (!flow_dissector_valid_access(skb, *p_offset, sizeof(iph)))
+                        return false;
+
+                bpf_probe_read(&iph, sizeof(iph), skb_data + *p_offset);
+
+                if (iph.ihl < 5)
+                        return false;
+
+                flow->addr_proto = ETH_P_IP;
+                flow->saddrv4 = iph.saddr;
+                flow->daddrv4 = iph.daddr;
+                flow->ip_proto = iph.protocol;
+
+                /* After the first frag, packets do not have headers to parse, so
+                 * return false to stop the dissection.
+                 */
+                if (iph.frag_off & htons(IP_OFFSET))
+                        return false;
+
+                *p_offset += iph.ihl << 2;
+
+                return true;
+        }
+
+        static __always_inline bool
+        flow_dissector_ipv6_dissect(struct sk_buff *skb, struct flow_key_record *flow,
+                                    __u16 *p_offset)
+        {
+                void *skb_data = (void *)(long) skb->data;
+                struct ipv6hdr ip6h;
+
+                if (!flow_dissector_valid_access(skb, *p_offset, sizeof(ip6h)))
+                        return false;
+
+                bpf_probe_read(&ip6h, sizeof(ip6h), skb_data + *p_offset);
+
+                flow->addr_proto = ETH_P_IPV6;
+                __builtin_memcpy(flow->saddrv6, &ip6h.saddr, sizeof(flow->saddrv6));
+                __builtin_memcpy(flow->daddrv6, &ip6h.daddr, sizeof(flow->daddrv6));
+                flow->ip_proto = ip6h.nexthdr;
+
+                *p_offset += sizeof(ip6h);
+
+                return true;
+        }
+
+        static __always_inline bool
+        flow_dissector_gre_dissect(struct sk_buff *skb, struct flow_key_record *flow,
+                                   __u16 *p_offset)
+        {
+                void *skb_data = (void *)(long) skb->data;
+                struct gre_hdr gre;
+
+                if (!flow_dissector_valid_access(skb, *p_offset, sizeof(gre)))
+                        return false;
+
+                bpf_probe_read(&gre, sizeof(gre), skb_data + *p_offset);
+
+                if (gre.flags & GRE_VERSION)
+                        return false;
+
+                *p_offset += sizeof(gre);
+                if (GRE_IS_CSUM(gre.flags))
+                        *p_offset += 4;
+                if (GRE_IS_KEY(gre.flags))
+                        *p_offset += 4;
+                if (GRE_IS_SEQ(gre.flags))
+                        *p_offset += 4;
+
+                if (gre.proto == htons(ETH_P_IP))
+                        return flow_dissector_ipv4_dissect(skb, flow, p_offset);
+                else if (gre.proto == htons(ETH_P_IPV6))
+                        return flow_dissector_ipv6_dissect(skb, flow, p_offset);
+
+                return false;
+        }
+
+        static __always_inline bool
+        flow_dissector_udp_dissect(struct sk_buff *skb, struct flow_key_record *flow,
+                                   __u16 *p_offset)
+        {
+                void *skb_data = (void *)(long) skb->data;
+                struct udphdr udp;
+
+                if (!flow_dissector_valid_access(skb, *p_offset, sizeof(udp)))
+                        return false;
+
+                bpf_probe_read(&udp, sizeof(udp), skb_data + *p_offset);
+
+                flow->sport = ntohs(udp.source);
+                flow->dport = ntohs(udp.dest);
+
+                *p_offset += ntohs(udp.len);
+
+                return true;
+        }
+
+        static __always_inline bool
+        flow_dissector_tcp_dissect(struct sk_buff *skb, struct flow_key_record *flow,
+                                   __u16 *p_offset)
+        {
+                void *skb_data = (void *)(long) skb->data;
+                struct tcphdr tcp;
+
+                if (!flow_dissector_valid_access(skb, *p_offset, sizeof(tcp)))
+                        return false;
+
+                bpf_probe_read(&tcp, sizeof(tcp), skb_data + *p_offset);
+
+                if (tcp.doff < 5 || tcp.doff > 15)
+                        return false;
+
+                flow->sport = ntohs(tcp.source);
+                flow->dport = ntohs(tcp.dest);
+
+                *p_offset += tcp.doff << 2;
+
+                return true;
+        }
+
+        static __always_inline void flow_dissector(struct sk_buff *skb,
+                                                   struct flow_key_record *flow)
+        {
+                void *skb_data = (void *)(long) skb->data;
+                struct vlan_hdr vlan_hdr;
+                __u16 offset, eth_proto;
+                struct ethhdr eth;
+
+                if (!flow_dissector_valid_access(skb, 0, sizeof(eth)))
+                        return;
+
+                bpf_probe_read(&eth, sizeof(eth), skb_data);
+
+                offset = ETH_HLEN;
+                eth_proto = ntohs(eth.h_proto);
+
+                if (eth_proto == ETH_P_8021AD) {
+                        bpf_probe_read(&vlan_hdr, sizeof(vlan_hdr), skb_data + offset);
+                        offset += sizeof(struct vlan_hdr);
+                        eth_proto = ntohs(vlan_hdr.h_vlan_encapsulated_proto);
+                }
+
+                if (eth_proto == ETH_P_8021Q) {
+                        bpf_probe_read(&vlan_hdr, sizeof(vlan_hdr), skb_data + offset);
+                        offset += sizeof(struct vlan_hdr);
+                        eth_proto = ntohs(vlan_hdr.h_vlan_encapsulated_proto);
+                }
+
+                switch (eth_proto) {
+                case ETH_P_IP:
+                        if (!flow_dissector_ipv4_dissect(skb, flow, &offset))
+                                return;
+                        break;
+                case ETH_P_IPV6:
+                        if (!flow_dissector_ipv6_dissect(skb, flow, &offset))
+                                return;
+                        break;
+                default:
+                        return;
+                }
+
+                switch (flow->ip_proto) {
+                case IPPROTO_IPIP:
+                        flow->is_encap = true;
+                        if (!flow_dissector_ipv4_dissect(skb, flow, &offset))
+                                return;
+                        break;
+                case IPPROTO_IPV6:
+                        flow->is_encap = true;
+                        if (!flow_dissector_ipv6_dissect(skb, flow, &offset))
+                                return;
+                        break;
+                case IPPROTO_GRE:
+                        flow->is_encap = true;
+                        if (!flow_dissector_gre_dissect(skb, flow, &offset))
+                                return;
+                        break;
+                default:
+                        break;
+                }
+
+                switch (flow->ip_proto) {
+                case IPPROTO_UDP:
+                case IPPROTO_UDPLITE:
+                        if (!flow_dissector_udp_dissect(skb, flow, &offset))
+                                return;
+                        break;
+                case IPPROTO_TCP:
+                        if (!flow_dissector_tcp_dissect(skb, flow, &offset))
+                                return;
+                        break;
+                default:
+                        return;
+                }
+        }
+
+        RAW_TRACEPOINT_PROBE(devlink_trap_report)
+        // TP_PROTO(const struct devlink *devlink, struct sk_buff *skb,
+        //          const struct devlink_trap_metadata *metadata)
+        {
+                struct sk_buff *skb = (struct sk_buff *) ctx->args[1];
+                const struct devlink_trap_metadata *metadata;
+                struct flow_key_record flow = {};
+                const char *trap_name;
+                u64 *val, zero = 0;
+
+                metadata = (struct devlink_trap_metadata *) ctx->args[2];
+                if (metadata->trap_type == DEVLINK_TRAP_TYPE_CONTROL)
+                        return 0;
+
+                flow_dissector(skb, &flow);
+
+                trap_name = metadata->trap_name;
+                bpf_probe_read_str(&flow.trap_name, TRAP_NAME_LEN, trap_name);
+                val = flows.lookup_or_init(&flow, &zero);
+                if (val)
+                        (*val)++;
+
+                return 0;
+        }

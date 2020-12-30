@@ -45,6 +45,12 @@ By default, the size of the LRU hash table is 1,024 entries. In case the
 table overflows, it will be flushed. It is possible to change the size
 of the hash table by modifying the configuration file.
 
+With kernel 5.10 and above it is possible to use `trapagg_tp.yaml`
+instead of `trapagg.yaml`. It attaches an eBPF program to the
+`devlink_trap_report` raw tracepoint, which should provide a more stable
+interface and better performance compared to the previously mentioned
+kprobe.
+
 [1]: https://github.com/cloudflare/ebpf_exporter
 [2]: https://github.com/cloudflare/ebpf_exporter#building-and-running
 [3]: https://grafana.com/
